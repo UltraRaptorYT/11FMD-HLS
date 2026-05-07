@@ -10,13 +10,23 @@ async function getUsers(reload?: boolean) {
   if (!res.ok) return [];
 
   const data = (await res.json()) as { items?: string[]; rows?: string[][] };
-  return data.items ?? data.rows?.map((r) => r[0]).filter(Boolean) ?? [];
+  return (
+    data.items ?? data.rows?.map((r) => `${r[0]} ${r[1]}`).filter(Boolean) ?? []
+  );
 }
 
-export default function Home() {
+export default async function Page({
+  searchParams,
+}: {
+  searchParams: { reload?: string };
+}) {
+  const reload = searchParams?.reload === "true";
+
+  const [users] = await Promise.all([getUsers(reload)]);
+
   return (
     <div className="w-full max-w-md mx-auto p-6">
-      <HomeClient />
+      <HomeClient namelist={users} />
     </div>
   );
 }

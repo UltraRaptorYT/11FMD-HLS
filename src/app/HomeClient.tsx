@@ -1,28 +1,540 @@
 "use client";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
+import { JSX, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { useEffect, useState, useMemo, useCallback, JSX } from "react";
 
-export default function HomeClient() {
-  const [activeTab, setActiveTab] = useState("tab1");
+function addMonths(date: Date, n: number) {
+  return new Date(date.getFullYear(), date.getMonth() + n, 1);
+}
+
+function toISO(date: Date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function fromISO(iso: string) {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function getPlanningMonth(today: Date) {
+  // Before 20th: plan next month
+  // From 20th onwards: plan following month
+  const offset = today.getDate() >= 20 ? 2 : 1;
+  return new Date(today.getFullYear(), today.getMonth() + offset, 1);
+}
+
+function isSameMonth(a: Date, b: Date) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth();
+}
+
+type DutyDay = {
+  iso: string;
+  enabled: boolean;
+};
+
+function buildDefaultMonth(date: Date): Record<string, DutyDay> {
+  const year = date.getFullYear();
+  const month = date.getMonth();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+  const result: Record<string, DutyDay> = {};
+
+  for (let d = 1; d <= daysInMonth; d++) {
+    const day = new Date(year, month, d);
+    const dayOfWeek = day.getDay();
+
+    // Monday = 1, Wednesday = 3, Friday = 5
+    if (![1, 3, 5].includes(dayOfWeek)) continue;
+
+    const iso = toISO(day);
+
+    result[iso] = {
+      iso,
+      enabled: false,
+    };
+  }
+
+  return result;
+}
+
+export default function HomeClient({
+  namelist,
+}: {
+  namelist: string[];
+}): JSX.Element {
+  const today = useMemo(() => new Date(), []);
+  const planningMonth = useMemo(() => getPlanningMonth(today), [today]);
+
+  const [monthOffset, setMonthOffset] = useState(0);
+  const [name, setName] = useState("");
+  const [showNameDropdown, setShowNameDropdown] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [lastSubmitAt, setLastSubmitAt] = useState(0);
+  const viewDate = useMemo(
+    () => addMonths(planningMonth, monthOffset),
+    [planningMonth, monthOffset],
+  );
+
+  const viewedMonthStart = useMemo(
+    () => new Date(viewDate.getFullYear(), viewDate.getMonth(), 1),
+    [viewDate],
+  );
+
+  const viewedMonthStartISO = toISO(viewedMonthStart);
+
+  const isLockedMonth = viewedMonthStart < planningMonth;
+  const isCurrentPlanningMonth = isSameMonth(viewedMonthStart, planningMonth);
+
+  const monthLabel = viewDate.toLocaleDateString("en-GB", {
+    month: "long",
+    year: "numeric",
+  });
+
+  const baseKey = "hlsDetails";
+  const nameKey = `${baseKey}:name`;
+  const monthKey = viewedMonthStartISO;
+  const draftKey = `${baseKey}:monthDraft:${name.trim()}:${monthKey}`;
+  const submittedKey = `${baseKey}:monthSubmitted:${name.trim()}:${monthKey}`;
+
+  useEffect(() => {
+    try {
+      setName(localStorage.getItem(nameKey) ?? "");
+    } catch {}
+  }, [nameKey]);
+
+  useEffect(() => {
+    try {
+      if (name) localStorage.setItem(nameKey, name);
+      else localStorage.removeItem(nameKey);
+    } catch {}
+  }, [name, nameKey]);
+
+  const [plan, setPlan] = useState<Record<string, DutyDay>>(() =>
+    buildDefaultMonth(planningMonth),
+  );
+
+  const activeDays = Object.values(plan).filter((d) => d.enabled);
+
+  const changeMonth = (offset: number) => {
+    const nextOffset = monthOffset + offset;
+    setMonthOffset(nextOffset);
+  };
+
+  useEffect(() => {
+    try {
+      const submitted = localStorage.getItem(submittedKey);
+      const draft = localStorage.getItem(draftKey);
+
+      if (submitted) {
+        setPlan(JSON.parse(submitted));
+        return;
+      }
+
+      if (draft) {
+        setPlan(JSON.parse(draft));
+        return;
+      }
+
+      setPlan(buildDefaultMonth(fromISO(viewedMonthStartISO)));
+    } catch {
+      setPlan(buildDefaultMonth(fromISO(viewedMonthStartISO)));
+    }
+  }, [draftKey, submittedKey, viewedMonthStartISO]);
+
+  useEffect(() => {
+    if (!name.trim()) return;
+
+    try {
+      localStorage.setItem(draftKey, JSON.stringify(plan));
+    } catch {}
+  }, [draftKey, name, plan]);
+
+  const toggleDuty = (iso: string) => {
+    if (isLockedMonth) return;
+
+    setPlan((prev) => ({
+      ...prev,
+      [iso]: {
+        ...prev[iso],
+        enabled: !prev[iso].enabled,
+      },
+    }));
+  };
+
+  const SUBMIT_COOLDOWN_MS = 3000;
+
+  const canSubmit = !isLockedMonth && !isSubmitting && Boolean(name.trim());
+
+  const clearMonth = () => {
+    if (isLockedMonth) return;
+
+    const cleared = buildDefaultMonth(fromISO(viewedMonthStartISO));
+    setPlan(cleared);
+
+    try {
+      localStorage.removeItem(draftKey);
+      localStorage.removeItem(submittedKey);
+    } catch {}
+
+    toast.info("Cleared", {
+      description: "Current month HLS availability has been cleared.",
+    });
+  };
+
+  const handleSubmit = async () => {
+    if (isSubmitting) return;
+
+    const now = Date.now();
+    const remaining = SUBMIT_COOLDOWN_MS - (now - lastSubmitAt);
+
+    if (remaining > 0) {
+      toast.error("Please wait before submitting again", {
+        description: `Try again in ${Math.ceil(remaining / 1000)}s.`,
+      });
+      return;
+    }
+
+    if (!name.trim()) {
+      toast.error("Please select your name first.");
+      return;
+    }
+
+    if (isLockedMonth) {
+      toast.error("This month is locked", {
+        description:
+          "You can view it, but you can no longer edit or submit it.",
+      });
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const res = await fetch("/api/submitAvailability", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(),
+          monthStart: toISO(viewedMonthStart),
+          availability: plan,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        toast.error("Submit failed", {
+          description: err?.error ?? "Please try again.",
+        });
+        return;
+      }
+
+      localStorage.setItem(submittedKey, JSON.stringify(plan));
+      localStorage.setItem(draftKey, JSON.stringify(plan));
+
+      setLastSubmitAt(Date.now());
+
+      toast.success("Submitted", {
+        description: "Your HLS availability has been saved.",
+      });
+    } catch {
+      toast.error("Submit failed", {
+        description: "Network error. Try again.",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   return (
-    <Tabs defaultValue="plan" className="w-full gap-6">
-      <TabsList className="w-full group-data-[orientation=horizontal]/tabs:h-12">
-        <TabsTrigger value="plan">Plan</TabsTrigger>
-        <TabsTrigger value="myBookings">My Bookings</TabsTrigger>
-        <TabsTrigger value="admin">Admin</TabsTrigger>
-      </TabsList>
+    <div className="flex flex-col gap-6 max-w-xl">
+      <div className="text-center space-y-1 relative">
+        <h1 className="text-xl font-bold text-white tracking-tight">
+          HLS Planner
+        </h1>
+        <p className="text-xs" style={{ color: "#555" }}>
+          Submit and manage your monthly HLS availability
+        </p>
+      </div>
 
-      <TabsContent value="plan" className="gap-6 flex flex-col"></TabsContent>
+      <Tabs defaultValue="plan" className="w-full gap-6">
+        <TabsList className="w-full group-data-[orientation=horizontal]/tabs:h-12">
+          <TabsTrigger value="plan">Plan</TabsTrigger>
+          <TabsTrigger value="myDuties">My Duties</TabsTrigger>
+          <TabsTrigger value="admin">Admin</TabsTrigger>
+        </TabsList>
 
-      <TabsContent
-        value="myBookings"
-        className="gap-6 flex flex-col"
-      ></TabsContent>
+        <TabsContent value="plan" className="gap-6 flex flex-col">
+          <div className="space-y-3 bg-muted p-4 rounded-lg">
+            <div className="space-y-2 relative">
+              <div
+                className="text-xs font-semibold tracking-wider uppercase"
+                style={{ color: "#c8a97e" }}
+              >
+                Editing HLS for
+              </div>
 
-      <TabsContent value="admin" className="gap-6 flex flex-col"></TabsContent>
-    </Tabs>
+              <div
+                className="flex items-center rounded-xl px-4 py-3 cursor-pointer"
+                style={{
+                  backgroundColor: "#0f0f0f",
+                  border: "1px solid #2a2a2a",
+                }}
+                onClick={() => setShowNameDropdown((p) => !p)}
+              >
+                <span className="flex-1 text-sm font-medium text-white">
+                  {name || "Select name..."}
+                </span>
+                <span style={{ color: "#666" }}>⌄</span>
+              </div>
+
+              {showNameDropdown && (
+                <div
+                  className="absolute z-50 top-full left-0 right-0 mt-1 rounded-xl overflow-hidden shadow-2xl"
+                  style={{
+                    backgroundColor: "#1a1a1a",
+                    border: "1px solid #2a2a2a",
+                  }}
+                >
+                  <div className="max-h-48 overflow-y-auto">
+                    {namelist.map((n) => (
+                      <button
+                        key={n}
+                        className="w-full text-left px-4 py-2.5 text-sm text-neutral-400 hover:text-white"
+                        onClick={() => {
+                          setName(n);
+                          setShowNameDropdown(false);
+                        }}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {!name ? (
+            <p className="text-sm text-muted-foreground">
+              Please select your name to start planning.
+            </p>
+          ) : (
+            <>
+              <div className="flex items-center justify-between">
+                <Button
+                  variant="outline"
+                  className="text-sm px-3"
+                  onClick={() => changeMonth(-1)}
+                >
+                  ←
+                </Button>
+
+                <div className="flex flex-col items-center">
+                  <div className="font-bold text-white text-base">
+                    {monthLabel}
+                  </div>
+
+                  {isLockedMonth ? (
+                    <div
+                      className="text-xs mt-0.5"
+                      style={{ color: "#f59e0b" }}
+                    >
+                      Locked
+                    </div>
+                  ) : (
+                    <div className="text-xs mt-0.5" style={{ color: "#666" }}>
+                      Monthly HLS planning
+                    </div>
+                  )}
+
+                  {!isCurrentPlanningMonth && (
+                    <button
+                      className="text-xs mt-1 font-medium"
+                      style={{ color: "#c8a97e" }}
+                      onClick={() => {
+                        setMonthOffset(0);
+                        setPlan(buildDefaultMonth(planningMonth));
+                      }}
+                    >
+                      Back to current month
+                    </button>
+                  )}
+                </div>
+
+                <Button
+                  variant="outline"
+                  className="text-sm px-3"
+                  onClick={() => changeMonth(1)}
+                >
+                  →
+                </Button>
+              </div>
+
+              <div className="space-y-3">
+                {Object.values(plan).map((day) => {
+                  const dateObj = new Date(day.iso);
+                  const dayName = dateObj.toLocaleDateString("en-GB", {
+                    weekday: "short",
+                  });
+                  const dayNum = dateObj.getDate();
+                  const monthShort = dateObj.toLocaleDateString("en-GB", {
+                    month: "short",
+                  });
+
+                  return (
+                    <div
+                      key={day.iso}
+                      className="rounded-xl p-4 transition-all duration-300 border"
+                      style={{
+                        backgroundColor: day.enabled ? "#1a1812" : "#111111",
+                        border: day.enabled
+                          ? "1px solid #3d3520"
+                          : "1px solid #1e1e1e",
+                      }}
+                    >
+                      <div className="flex items-center gap-4">
+                        <div className="flex flex-col items-center min-w-9">
+                          <span
+                            className="text-[10px] font-bold tracking-wider uppercase"
+                            style={{
+                              color: day.enabled ? "#c8a97e" : "#555",
+                            }}
+                          >
+                            {dayName}
+                          </span>
+
+                          <span
+                            className={`text-xl font-bold ${
+                              day.enabled ? "text-white" : "text-neutral-600"
+                            }`}
+                          >
+                            {dayNum}
+                          </span>
+
+                          <span
+                            className="text-[10px]"
+                            style={{ color: "#555" }}
+                          >
+                            {monthShort}
+                          </span>
+                        </div>
+
+                        <div className="flex-1">
+                          <div
+                            className="text-sm font-medium"
+                            style={{
+                              color: day.enabled ? "#c8a97e" : "#555",
+                            }}
+                          >
+                            {isLockedMonth
+                              ? "Locked"
+                              : day.enabled
+                                ? "Available"
+                                : "Unavailable"}
+                          </div>
+                        </div>
+
+                        <Button
+                          disabled={isLockedMonth}
+                          onClick={() => toggleDuty(day.iso)}
+                          className="relative w-12 h-7 rounded-full transition-all duration-300 disabled:opacity-50"
+                          style={{
+                            backgroundColor: day.enabled
+                              ? "#c8a97e"
+                              : "#2a2a2a",
+                          }}
+                        >
+                          <div
+                            className="absolute top-0.5 w-6 h-6 rounded-full bg-white shadow-md transition-all duration-300"
+                            style={{
+                              left: day.enabled
+                                ? "calc(100% - 1.625rem)"
+                                : "0.125rem",
+                            }}
+                          />
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  disabled={isLockedMonth}
+                  className="h-10 bg-[#1a1111] disabled:opacity-50 text-sm font-medium transition-all"
+                  style={{ border: "1px solid #3d2020", color: "#e85555" }}
+                  onClick={clearMonth}
+                >
+                  Clear
+                </Button>
+
+                <Button
+                  disabled={!canSubmit}
+                  className="flex-1 py-3 h-10 text-sm font-bold transition-all duration-300"
+                  style={
+                    canSubmit
+                      ? {
+                          background:
+                            "linear-gradient(135deg, #c8a97e 0%, #a88a5e 100%)",
+                          color: "#0a0a0a",
+                          boxShadow: "0 4px 20px #c8a97e44",
+                        }
+                      : {
+                          backgroundColor: "#1a1a1a",
+                          color: "#444",
+                          border: "1px solid #252525",
+                        }
+                  }
+                  onClick={handleSubmit}
+                >
+                  {isSubmitting ? "Submitting..." : "Submit Availability"}
+                </Button>
+              </div>
+            </>
+          )}
+        </TabsContent>
+
+        <TabsContent value="myDuties" className="gap-6 flex flex-col">
+          <div className="space-y-2">
+            {activeDays.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No availability selected.
+              </p>
+            ) : (
+              activeDays.map((day) => (
+                <div
+                  key={day.iso}
+                  className="rounded-xl px-4 py-3"
+                  style={{
+                    backgroundColor: "#161616",
+                    border: "1px solid #1e1e1e",
+                  }}
+                >
+                  <span className="text-sm font-medium text-white">
+                    {new Date(day.iso).toLocaleDateString("en-GB", {
+                      weekday: "long",
+                      day: "numeric",
+                      month: "long",
+                      year: "numeric",
+                    })}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="admin" className="gap-6 flex flex-col">
+          Admin view later
+        </TabsContent>
+      </Tabs>
+    </div>
   );
 }
