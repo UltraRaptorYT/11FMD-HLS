@@ -22,8 +22,8 @@ const auth = new google.auth.GoogleAuth({
 
 const sheets = google.sheets({ version: "v4", auth });
 
-const SHEET_ID = process.env.HLS_SHEET_ID!;
-const SHEET_NAME = process.env.HLS_SHEET_NAME!;
+const SHEET_ID = process.env.SHEET_ID!;
+const SHEET_NAME = process.env.AVAILABILITY_SHEET_NAME!;
 
 const WRITE_COLS_START = "B";
 const WRITE_COLS_END = "G";

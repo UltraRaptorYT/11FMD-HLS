@@ -55,7 +55,7 @@ function buildDefaultMonth(date: Date): Record<string, DutyDay> {
 
     result[iso] = {
       iso,
-      enabled: false,
+      enabled: true,
     };
   }
 
@@ -69,7 +69,7 @@ export default function HomeClient({
 }): JSX.Element {
   const today = useMemo(() => new Date(), []);
   const planningMonth = useMemo(() => getPlanningMonth(today), [today]);
-
+  const [nameSearch, setNameSearch] = useState("");
   const [monthOffset, setMonthOffset] = useState(0);
   const [name, setName] = useState("");
   const [showNameDropdown, setShowNameDropdown] = useState(false);
@@ -78,6 +78,10 @@ export default function HomeClient({
   const viewDate = useMemo(
     () => addMonths(planningMonth, monthOffset),
     [planningMonth, monthOffset],
+  );
+
+  const filteredNames = namelist.filter((n) =>
+    n.toLowerCase().includes(nameSearch.toLowerCase()),
   );
 
   const viewedMonthStart = useMemo(
@@ -170,10 +174,24 @@ export default function HomeClient({
 
   const canSubmit = !isLockedMonth && !isSubmitting && Boolean(name.trim());
 
+  const resetMonth = () => {
+    if (isLockedMonth) return;
+
+    const reset = buildDefaultMonth(fromISO(viewedMonthStartISO));
+    setPlan(reset);
+
+    toast.info("Reset to default");
+  };
+
   const clearMonth = () => {
     if (isLockedMonth) return;
 
-    const cleared = buildDefaultMonth(fromISO(viewedMonthStartISO));
+    const cleared = Object.fromEntries(
+      Object.entries(buildDefaultMonth(fromISO(viewedMonthStartISO))).map(
+        ([iso, day]) => [iso, { ...day, enabled: false }],
+      ),
+    );
+
     setPlan(cleared);
 
     try {
@@ -300,19 +318,51 @@ export default function HomeClient({
                     border: "1px solid #2a2a2a",
                   }}
                 >
+                  <div className="p-2">
+                    <input
+                      type="text"
+                      value={nameSearch}
+                      onChange={(e) => setNameSearch(e.target.value)}
+                      placeholder="Search..."
+                      className="w-full px-3 py-2 rounded-lg text-sm text-white placeholder-neutral-600 outline-none"
+                      style={{
+                        backgroundColor: "#0f0f0f",
+                        border: "1px solid #333",
+                      }}
+                      autoFocus
+                    />
+                  </div>
+
                   <div className="max-h-48 overflow-y-auto">
-                    {namelist.map((n) => (
-                      <button
-                        key={n}
-                        className="w-full text-left px-4 py-2.5 text-sm text-neutral-400 hover:text-white"
-                        onClick={() => {
-                          setName(n);
-                          setShowNameDropdown(false);
-                        }}
+                    {filteredNames.length === 0 ? (
+                      <div
+                        className="px-4 py-3 text-sm"
+                        style={{ color: "#666" }}
                       >
-                        {n}
-                      </button>
-                    ))}
+                        No names found
+                      </div>
+                    ) : (
+                      filteredNames.map((n) => (
+                        <button
+                          key={n}
+                          className={`w-full text-left px-4 py-2.5 text-sm transition-colors ${
+                            n === name
+                              ? "text-white"
+                              : "text-neutral-400 hover:text-white"
+                          }`}
+                          style={
+                            n === name ? { backgroundColor: "#252525" } : {}
+                          }
+                          onClick={() => {
+                            setName(n);
+                            setShowNameDropdown(false);
+                            setNameSearch("");
+                          }}
+                        >
+                          {n}
+                        </button>
+                      ))
+                    )}
                   </div>
                 </div>
               )}
@@ -465,6 +515,16 @@ export default function HomeClient({
               </div>
 
               <div className="flex gap-2">
+                <Button
+                  variant="secondary"
+                  disabled={isLockedMonth}
+                  className="h-10 bg-[#1a1111] disabled:opacity-50 text-sm font-medium transition-all"
+                  // className="h-10 bg-[#1a1111] disabled:opacity-50 text-sm font-medium transition-all"
+                  style={{ border: "1px solid #20283d", color: "#557ce8" }}
+                  onClick={clearMonth}
+                >
+                  Reset
+                </Button>
                 <Button
                   variant="outline"
                   disabled={isLockedMonth}
