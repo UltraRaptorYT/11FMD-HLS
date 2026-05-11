@@ -24,19 +24,6 @@ function getAuth() {
   });
 }
 
-function makeAvailabilityId(name: string, monthStart: string, date: string) {
-  const monthSerial = dateToGoogleSerial(monthStart);
-  const dateSerial = dateToGoogleSerial(date);
-  return `${name}|${monthSerial}|${dateSerial}`;
-}
-
-function dateToGoogleSerial(iso: string) {
-  const [y, m, d] = iso.split("-").map(Number);
-  const utc = Date.UTC(y, m - 1, d);
-  const googleEpoch = Date.UTC(1899, 11, 30);
-  return Math.floor((utc - googleEpoch) / 86400000);
-}
-
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -62,17 +49,11 @@ export async function POST(req: NextRequest) {
     const rows = existingRes.data.values ?? [];
     const headers = rows[0] ?? [];
 
-    const idIdx = headers.indexOf("availability_id");
     const monthStartIdx = headers.indexOf("month_start");
     const dateIdx = headers.indexOf("date");
     const nameIdx = headers.indexOf("name");
 
-    if (
-      idIdx === -1 ||
-      monthStartIdx === -1 ||
-      dateIdx === -1 ||
-      nameIdx === -1
-    ) {
+    if (monthStartIdx === -1 || dateIdx === -1 || nameIdx === -1) {
       return NextResponse.json(
         { error: "Missing required AVAILABILITY headers" },
         { status: 500 },
@@ -81,11 +62,16 @@ export async function POST(req: NextRequest) {
 
     const now = new Date().toISOString();
 
-    const existingRowById = new Map<string, number>();
+    const existingRowMap = new Map<string, number>();
 
     rows.slice(1).forEach((row, i) => {
-      const id = String(row[idIdx] ?? "").trim();
-      if (id) existingRowById.set(id, i + 2);
+      const rowMonthStart = String(row[monthStartIdx] ?? "").trim();
+      const rowDate = String(row[dateIdx] ?? "").trim();
+      const rowName = String(row[nameIdx] ?? "").trim();
+
+      if (!rowMonthStart || !rowDate || !rowName) return;
+
+      existingRowMap.set(`${rowName}|${rowMonthStart}|${rowDate}`, i + 2);
     });
 
     const updates: Promise<unknown>[] = [];
@@ -93,9 +79,11 @@ export async function POST(req: NextRequest) {
 
     for (const day of Object.values(availability)) {
       const date = day.iso;
-      const id = makeAvailabilityId(name, monthStart, date);
+      const existingRowNumber = existingRowMap.get(
+        `${name}|${monthStart}|${date}`,
+      );
 
-      // B:G only
+      // B:G only. Column A is formula-generated.
       const rowValues = [
         monthStart,
         date,
@@ -104,8 +92,6 @@ export async function POST(req: NextRequest) {
         now,
         now,
       ];
-
-      const existingRowNumber = existingRowById.get(id);
 
       if (existingRowNumber) {
         updates.push(
