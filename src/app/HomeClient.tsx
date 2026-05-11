@@ -15,6 +15,15 @@ function getPlanningMonth(today: Date) {
   return new Date(today.getFullYear(), today.getMonth() + offset, 1);
 }
 
+function toPlanningMonthSheetName(date: Date) {
+  return date
+    .toLocaleDateString("en-GB", {
+      month: "short",
+      year: "numeric",
+    })
+    .toUpperCase();
+}
+
 function isSameMonth(a: Date, b: Date) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth();
 }
@@ -94,7 +103,6 @@ export default function HomeClient({
 
   const viewedMonthStartISO = toISO(viewedMonthStart);
 
-  const isLockedMonth = viewedMonthStart < planningMonth;
   const isCurrentPlanningMonth = isSameMonth(viewedMonthStart, planningMonth);
 
   const monthLabel = viewDate.toLocaleDateString("en-GB", {
@@ -102,11 +110,69 @@ export default function HomeClient({
     year: "numeric",
   });
 
+  const planningMonthSheetName = useMemo(
+    () => toPlanningMonthSheetName(viewedMonthStart),
+    [viewedMonthStart],
+  );
+
+  const [planningLock, setPlanningLock] = useState<{
+    locked: boolean;
+    finalStatus: string;
+    source: string;
+  } | null>(null);
+
+  const [isLockLoading, setIsLockLoading] = useState(false);
+
   const baseKey = "hlsDetails";
   const nameKey = `${baseKey}:name`;
   const monthKey = viewedMonthStartISO;
   const draftKey = `${baseKey}:monthDraft:${name.trim()}:${monthKey}`;
   const submittedKey = `${baseKey}:monthSubmitted:${name.trim()}:${monthKey}`;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchPlanningLock() {
+      setIsLockLoading(true);
+
+      try {
+        const res = await fetch(
+          `/api/getPlanningLock?${new URLSearchParams({
+            month: planningMonthSheetName,
+          })}`,
+        );
+
+        if (!res.ok) {
+          console.error(`[HLS] getPlanningLock ${res.status}`);
+          setPlanningLock(null);
+          return;
+        }
+
+        const data = await res.json();
+
+        if (!cancelled) {
+          setPlanningLock({
+            locked: Boolean(data.locked),
+            finalStatus: data.finalStatus ?? "UNLOCKED",
+            source: data.source ?? "unknown",
+          });
+        }
+      } catch (e) {
+        console.error("[HLS] getPlanningLock error:", e);
+        if (!cancelled) setPlanningLock(null);
+      } finally {
+        if (!cancelled) setIsLockLoading(false);
+      }
+    }
+
+    fetchPlanningLock();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [planningMonthSheetName]);
+
+  const isLockedMonth = Boolean(planningLock?.locked);
 
   useEffect(() => {
     try {
@@ -229,7 +295,8 @@ export default function HomeClient({
 
   const SUBMIT_COOLDOWN_MS = 3000;
 
-  const canSubmit = !isLockedMonth && !isSubmitting && Boolean(name.trim());
+  const canSubmit =
+    !isLockLoading && !isLockedMonth && !isSubmitting && Boolean(name.trim());
 
   useEffect(() => {
     if (!name.trim()) {
@@ -519,7 +586,11 @@ export default function HomeClient({
                     {monthLabel}
                   </div>
 
-                  {isLockedMonth ? (
+                  {isLockLoading ? (
+                    <div className="text-xs mt-0.5" style={{ color: "#666" }}>
+                      Checking lock...
+                    </div>
+                  ) : isLockedMonth ? (
                     <div
                       className="text-xs mt-0.5"
                       style={{ color: "#f59e0b" }}
@@ -527,8 +598,11 @@ export default function HomeClient({
                       Locked
                     </div>
                   ) : (
-                    <div className="text-xs mt-0.5" style={{ color: "#666" }}>
-                      Monthly HLS planning
+                    <div
+                      className="text-xs mt-0.5"
+                      style={{ color: "#4ade80" }}
+                    >
+                      Unlocked
                     </div>
                   )}
 
@@ -620,7 +694,7 @@ export default function HomeClient({
                         </div>
 
                         <Button
-                          disabled={isLockedMonth}
+                          disabled={isLockedMonth || isLockLoading}
                           onClick={() => toggleDuty(day.iso)}
                           className="relative w-12 h-7 rounded-full transition-all duration-300 disabled:opacity-50"
                           style={{
