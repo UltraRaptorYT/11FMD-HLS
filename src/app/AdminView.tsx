@@ -237,7 +237,17 @@ function buildPlanningMonthOptions(baseDate: Date) {
   });
 }
 
-export default function AdminDutyView() {
+export default function AdminDutyView({
+  selectedMonth,
+  setSelectedMonth,
+  selectedDate,
+  setSelectedDate,
+}: {
+  selectedMonth: string;
+  setSelectedMonth: (value: string) => void;
+  selectedDate: string;
+  setSelectedDate: (value: string) => void;
+}) {
   const today = useMemo(() => new Date(), []);
   const defaultPlanningMonth = useMemo(() => getPlanningMonth(today), [today]);
 
@@ -246,12 +256,7 @@ export default function AdminDutyView() {
     [defaultPlanningMonth],
   );
 
-  const [selectedMonth, setSelectedMonth] = useState(
-    toPlanningMonthSheetName(defaultPlanningMonth),
-  );
-
   const [dates, setDates] = useState<AdminDutyDate[]>([]);
-  const [selectedDate, setSelectedDate] = useState("");
   const [dutiesByDate, setDutiesByDate] = useState<AdminDutyByDate>({});
   const [isLoading, setIsLoading] = useState(false);
 
@@ -284,7 +289,9 @@ export default function AdminDutyView() {
 
           setDates(nextDates);
           setDutiesByDate(nextDutiesByDate);
-          setSelectedDate(nextDates[0]?.iso ?? "");
+          if (!selectedDate || !nextDutiesByDate[selectedDate]) {
+            setSelectedDate(nextDates[0]?.iso ?? "");
+          }
         }
       } catch (e) {
         console.error("[AdminDutyView] fetch error:", e);

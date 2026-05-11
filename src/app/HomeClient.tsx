@@ -71,6 +71,22 @@ export default function HomeClient({
     n.toLowerCase().includes(nameSearch.toLowerCase()),
   );
 
+  const defaultAdminMonth = useMemo(
+    () =>
+      planningMonth
+        .toLocaleDateString("en-GB", {
+          month: "short",
+          year: "numeric",
+        })
+        .toUpperCase(),
+    [planningMonth],
+  );
+
+  const [adminSelectedMonth, setAdminSelectedMonth] =
+    useState(defaultAdminMonth);
+  const [adminSelectedDate, setAdminSelectedDate] = useState("");
+  const [activeTab, setActiveTab] = useState("plan");
+
   const viewedMonthStart = useMemo(
     () => new Date(viewDate.getFullYear(), viewDate.getMonth(), 1),
     [viewDate],
@@ -375,7 +391,11 @@ export default function HomeClient({
         </p>
       </div>
 
-      <Tabs defaultValue="plan" className="w-full gap-6">
+      <Tabs
+        value={activeTab}
+        onValueChange={setActiveTab}
+        className="w-full gap-6"
+      >
         <TabsList className="w-full group-data-[orientation=horizontal]/tabs:h-12">
           <TabsTrigger value="plan">Plan</TabsTrigger>
           <TabsTrigger value="myDuties">My Duties</TabsTrigger>
@@ -672,11 +692,24 @@ export default function HomeClient({
         </TabsContent>
 
         <TabsContent value="myDuties" className="gap-6 flex flex-col">
-          <MyDutyView name={name} planningMonth={planningMonth} />
+          <MyDutyView
+            name={name}
+            planningMonth={planningMonth}
+            onSelectAdminDate={({ sheetName, iso }) => {
+              setAdminSelectedMonth(sheetName);
+              setAdminSelectedDate(iso);
+              setActiveTab("admin");
+            }}
+          />
         </TabsContent>
 
         <TabsContent value="admin" className="gap-6 flex flex-col">
-          <AdminDutyView />
+          <AdminDutyView
+            selectedMonth={adminSelectedMonth}
+            setSelectedMonth={setAdminSelectedMonth}
+            selectedDate={adminSelectedDate}
+            setSelectedDate={setAdminSelectedDate}
+          />
         </TabsContent>
       </Tabs>
     </div>

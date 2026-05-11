@@ -15,9 +15,11 @@ function toPlanningMonthSheetName(date: Date) {
 export default function MyDutyView({
   name,
   planningMonth,
+  onSelectAdminDate,
 }: {
   name: string;
   planningMonth: Date;
+  onSelectAdminDate?: (payload: { sheetName: string; iso: string }) => void;
 }) {
   const [monthOffset, setMonthOffset] = useState(0);
   const [duties, setDuties] = useState<{ iso: string; label: string }[]>([]);
@@ -191,15 +193,26 @@ export default function MyDutyView({
                 const hasDuty = dutySet.has(iso);
 
                 return (
-                  <div
+                  <button
                     key={iso}
-                    className="relative flex flex-col items-center justify-center rounded-lg py-2 transition-all"
+                    type="button"
+                    disabled={!hasDuty}
+                    onClick={() => {
+                      if (!hasDuty) return;
+
+                      onSelectAdminDate?.({
+                        sheetName: planningMonthSheetName,
+                        iso,
+                      });
+                    }}
+                    className="relative flex flex-col items-center justify-center rounded-lg py-2 transition-all disabled:cursor-default"
                     style={{
                       backgroundColor: hasDuty ? "#1a1812" : "transparent",
                       border: hasDuty
                         ? "1px solid #2a2518"
                         : "1px solid transparent",
                       minHeight: "52px",
+                      cursor: hasDuty ? "pointer" : "default",
                     }}
                   >
                     <span
@@ -218,7 +231,7 @@ export default function MyDutyView({
                         />
                       </div>
                     )}
-                  </div>
+                  </button>
                 );
               })}
 
