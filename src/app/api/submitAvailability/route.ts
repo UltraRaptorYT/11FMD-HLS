@@ -6,215 +6,142 @@ type DutyDay = {
   enabled: boolean;
 };
 
-type SubmitAvailabilityBody = {
-  name: string;
-  monthStart: string;
-  availability: Record<string, DutyDay>;
-};
+const SPREADSHEET_ID = process.env.SHEET_ID!;
+const SHEET_NAME = "AVAILABILITY";
 
-const auth = new google.auth.GoogleAuth({
-  credentials: {
-    client_email: process.env.GOOGLE_SERVICE_EMAIL,
-    private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
-  },
-  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-});
+function getAuth() {
+  const email = process.env.GOOGLE_SERVICE_EMAIL;
+  const key = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n");
 
-const sheets = google.sheets({ version: "v4", auth });
+  if (!email || !key) {
+    throw new Error("Missing Google service account env vars");
+  }
 
-const SHEET_ID = process.env.SHEET_ID!;
-const SHEET_NAME = process.env.AVAILABILITY_SHEET_NAME!;
-
-const WRITE_COLS_START = "B";
-const WRITE_COLS_END = "G";
-
-function keyOf(monthStart: string, date: string, name: string) {
-  return `${monthStart}|${date}|${name}`;
+  return new google.auth.JWT({
+    email,
+    key,
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  });
 }
 
-async function appendRowsAtB(
-  spreadsheetId: string,
-  sheetName: string,
-  rowsBtoG: (string | number | boolean)[][],
-) {
-  if (rowsBtoG.length === 0) return;
+function makeAvailabilityId(name: string, monthStart: string, date: string) {
+  const monthSerial = dateToGoogleSerial(monthStart);
+  const dateSerial = dateToGoogleSerial(date);
+  return `${name}|${monthSerial}|${dateSerial}`;
+}
 
-  const meta = await sheets.spreadsheets.get({
-    spreadsheetId,
-    ranges: [sheetName],
-    includeGridData: false,
-  });
-
-  const sheet = meta.data.sheets?.find(
-    (s) => s.properties?.title === sheetName,
-  );
-
-  if (sheet?.properties?.sheetId == null) {
-    throw new Error(`Sheet not found: ${sheetName}`);
-  }
-
-  const sheetId = sheet.properties.sheetId;
-  const currentRowCount = sheet.properties.gridProperties?.rowCount ?? 1000;
-
-  const colB = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `${sheetName}!B2:B`,
-  });
-
-  const values = colB.data.values ?? [];
-
-  let lastUsedRow = 1;
-
-  for (let i = values.length - 1; i >= 0; i--) {
-    const cell = values[i]?.[0];
-    if (cell !== undefined && String(cell).trim() !== "") {
-      lastUsedRow = i + 2;
-      break;
-    }
-  }
-
-  const nextRow = lastUsedRow + 1;
-  const neededLastRow = nextRow + rowsBtoG.length - 1;
-
-  if (neededLastRow > currentRowCount) {
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId,
-      requestBody: {
-        requests: [
-          {
-            appendDimension: {
-              sheetId,
-              dimension: "ROWS",
-              length: neededLastRow - currentRowCount,
-            },
-          },
-        ],
-      },
-    });
-  }
-
-  const data = rowsBtoG.map((row, i) => ({
-    range: `${sheetName}!B${nextRow + i}:G${nextRow + i}`,
-    values: [row],
-  }));
-
-  await sheets.spreadsheets.values.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      valueInputOption: "USER_ENTERED",
-      data,
-    },
-  });
+function dateToGoogleSerial(iso: string) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const utc = Date.UTC(y, m - 1, d);
+  const googleEpoch = Date.UTC(1899, 11, 30);
+  return Math.floor((utc - googleEpoch) / 86400000);
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as SubmitAvailabilityBody;
+    const body = await req.json();
 
-    const name = body.name?.trim();
-    const monthStart = body.monthStart?.trim();
-    const availability = body.availability;
+    const name = String(body.name ?? "").trim();
+    const monthStart = String(body.monthStart ?? "").trim();
+    const availability = body.availability as Record<string, DutyDay>;
 
-    if (!name) {
-      return NextResponse.json({ error: "Name is required." }, { status: 400 });
-    }
-
-    if (!monthStart) {
+    if (!name || !monthStart || !availability) {
       return NextResponse.json(
-        { error: "Month start is required." },
+        { error: "Missing name, monthStart, or availability" },
         { status: 400 },
       );
     }
 
-    if (!availability || typeof availability !== "object") {
+    const sheets = google.sheets({ version: "v4", auth: getAuth() });
+
+    const existingRes = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${SHEET_NAME}!A:G`,
+    });
+
+    const rows = existingRes.data.values ?? [];
+    const headers = rows[0] ?? [];
+
+    const idIdx = headers.indexOf("availability_id");
+    const monthStartIdx = headers.indexOf("month_start");
+    const dateIdx = headers.indexOf("date");
+    const nameIdx = headers.indexOf("name");
+
+    if (
+      idIdx === -1 ||
+      monthStartIdx === -1 ||
+      dateIdx === -1 ||
+      nameIdx === -1
+    ) {
       return NextResponse.json(
-        { error: "Availability is required." },
-        { status: 400 },
+        { error: "Missing required AVAILABILITY headers" },
+        { status: 500 },
       );
     }
 
     const now = new Date().toISOString();
 
-    const desiredByKey = new Map<string, (string | number | boolean)[]>();
+    const existingRowById = new Map<string, number>();
+
+    rows.slice(1).forEach((row, i) => {
+      const id = String(row[idIdx] ?? "").trim();
+      if (id) existingRowById.set(id, i + 2);
+    });
+
+    const updates: Promise<unknown>[] = [];
+    const appends: unknown[][] = [];
 
     for (const day of Object.values(availability)) {
-      const row: (string | number | boolean)[] = [
-        monthStart, // B
-        day.iso, // C
-        name, // D
-        day.enabled, // E
-        now, // F submitted_at
-        now, // G updated_at
+      const date = day.iso;
+      const id = makeAvailabilityId(name, monthStart, date);
+
+      // B:G only
+      const rowValues = [
+        monthStart,
+        date,
+        name,
+        day.enabled ? "TRUE" : "FALSE",
+        now,
+        now,
       ];
 
-      desiredByKey.set(keyOf(monthStart, day.iso, name), row);
-    }
+      const existingRowNumber = existingRowById.get(id);
 
-    const readRes = await sheets.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID,
-      range: `${SHEET_NAME}!B2:D`,
-    });
-
-    const existing = (readRes.data.values ?? []) as string[][];
-    const rowByKey = new Map<string, number>();
-
-    existing.forEach((r, idx) => {
-      const ms = (r?.[0] ?? "").trim(); // B month_start
-      const dt = (r?.[1] ?? "").trim(); // C date
-      const nm = (r?.[2] ?? "").trim(); // D name
-
-      if (!ms || !dt || !nm) return;
-
-      rowByKey.set(keyOf(ms, dt, nm), idx + 2);
-    });
-
-    const updateRequests: {
-      range: string;
-      values: (string | number | boolean)[][];
-    }[] = [];
-
-    const appendValues: (string | number | boolean)[][] = [];
-
-    for (const [key, rowValues] of desiredByKey.entries()) {
-      const existingRowNumber = rowByKey.get(key);
-
-      if (existingRowNumber != null) {
-        updateRequests.push({
-          range: `${SHEET_NAME}!${WRITE_COLS_START}${existingRowNumber}:${WRITE_COLS_END}${existingRowNumber}`,
-          values: [rowValues],
-        });
+      if (existingRowNumber) {
+        updates.push(
+          sheets.spreadsheets.values.update({
+            spreadsheetId: SPREADSHEET_ID,
+            range: `${SHEET_NAME}!B${existingRowNumber}:G${existingRowNumber}`,
+            valueInputOption: "USER_ENTERED",
+            requestBody: {
+              values: [rowValues],
+            },
+          }),
+        );
       } else {
-        appendValues.push(rowValues);
+        appends.push(rowValues);
       }
     }
 
-    if (updateRequests.length > 0) {
-      await sheets.spreadsheets.values.batchUpdate({
-        spreadsheetId: SHEET_ID,
+    await Promise.all(updates);
+
+    if (appends.length > 0) {
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${SHEET_NAME}!B:G`,
+        valueInputOption: "USER_ENTERED",
+        insertDataOption: "INSERT_ROWS",
         requestBody: {
-          valueInputOption: "USER_ENTERED",
-          data: updateRequests,
+          values: appends,
         },
       });
     }
 
-    if (appendValues.length > 0) {
-      await appendRowsAtB(SHEET_ID, SHEET_NAME, appendValues);
-    }
-
-    return NextResponse.json({
-      ok: true,
-      name,
-      monthStart,
-      updated: updateRequests.length,
-      appended: appendValues.length,
-      totalWritten: updateRequests.length + appendValues.length,
-    });
+    return NextResponse.json({ ok: true });
   } catch (error) {
-    console.error("[submitAvailability] error:", error);
-
+    console.error("[submitAvailability]", error);
     return NextResponse.json(
-      { error: "Failed to submit availability." },
+      { error: "Failed to submit availability" },
       { status: 500 },
     );
   }

@@ -4,22 +4,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { JSX, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-
-function addMonths(date: Date, n: number) {
-  return new Date(date.getFullYear(), date.getMonth() + n, 1);
-}
-
-function toISO(date: Date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
-
-function fromISO(iso: string) {
-  const [y, m, d] = iso.split("-").map(Number);
-  return new Date(y, m - 1, d);
-}
+import MyDutyView from "@/app/DutyView";
+import AdminDutyView from "@/app/AdminView";
+import { addMonths, fromISO, toISO } from "@/lib/utils";
 
 function getPlanningMonth(today: Date) {
   // Before 20th: plan next month
@@ -129,6 +116,60 @@ export default function HomeClient({
     setMonthOffset(nextOffset);
   };
 
+  const cacheKey = `${baseKey}:serverCache:${name.trim()}`;
+  const [serverCache, setServerCache] = useState<
+    Record<string, Record<string, DutyDay>>
+  >({});
+  const [isFetching, setIsFetching] = useState(false);
+  const [submittedFingerprint, setSubmittedFingerprint] = useState("");
+
+  const currentFingerprint = useMemo(() => JSON.stringify(plan), [plan]);
+
+  const hasUnsavedChanges = useMemo(() => {
+    if (!submittedFingerprint) return false;
+    return currentFingerprint !== submittedFingerprint;
+  }, [currentFingerprint, submittedFingerprint]);
+
+  useEffect(() => {
+    const savedFromServer = serverCache[viewedMonthStartISO];
+
+    if (savedFromServer) {
+      setPlan(savedFromServer);
+      const fp = JSON.stringify(savedFromServer);
+      setSubmittedFingerprint(fp);
+
+      try {
+        localStorage.setItem(submittedKey, fp);
+        localStorage.setItem(draftKey, fp);
+      } catch {}
+
+      return;
+    }
+
+    try {
+      const submitted = localStorage.getItem(submittedKey);
+      const draft = localStorage.getItem(draftKey);
+
+      if (submitted) {
+        setPlan(JSON.parse(submitted));
+        setSubmittedFingerprint(submitted);
+        return;
+      }
+
+      if (draft) {
+        setPlan(JSON.parse(draft));
+        setSubmittedFingerprint("");
+        return;
+      }
+
+      setPlan(buildDefaultMonth(fromISO(viewedMonthStartISO)));
+      setSubmittedFingerprint("");
+    } catch {
+      setPlan(buildDefaultMonth(fromISO(viewedMonthStartISO)));
+      setSubmittedFingerprint("");
+    }
+  }, [serverCache, viewedMonthStartISO, submittedKey, draftKey]);
+
   useEffect(() => {
     try {
       const submitted = localStorage.getItem(submittedKey);
@@ -173,6 +214,61 @@ export default function HomeClient({
   const SUBMIT_COOLDOWN_MS = 3000;
 
   const canSubmit = !isLockedMonth && !isSubmitting && Boolean(name.trim());
+
+  useEffect(() => {
+    if (!name.trim()) {
+      setServerCache({});
+      return;
+    }
+
+    let cancelled = false;
+
+    async function fetchAllAvailability() {
+      try {
+        const cached = localStorage.getItem(cacheKey);
+        if (cached && !cancelled) setServerCache(JSON.parse(cached));
+      } catch {}
+
+      setIsFetching(true);
+
+      try {
+        const res = await fetch(
+          `/api/getAllAvailability?${new URLSearchParams({ name: name.trim() })}`,
+        );
+
+        if (!res.ok) {
+          console.error(`[HLS] getAllAvailability ${res.status}`);
+          return;
+        }
+
+        const data = await res.json();
+
+        if (!cancelled && data?.months) {
+          const months = data.months as Record<string, Record<string, DutyDay>>;
+
+          setServerCache(months);
+          localStorage.setItem(cacheKey, JSON.stringify(months));
+
+          for (const [monthStart, monthPlan] of Object.entries(months)) {
+            localStorage.setItem(
+              `${baseKey}:monthSubmitted:${name.trim()}:${monthStart}`,
+              JSON.stringify(monthPlan),
+            );
+          }
+        }
+      } catch (e) {
+        console.error("[HLS] fetch availability error:", e);
+      } finally {
+        if (!cancelled) setIsFetching(false);
+      }
+    }
+
+    fetchAllAvailability();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [name, cacheKey]);
 
   const resetMonth = () => {
     if (isLockedMonth) return;
@@ -297,17 +393,31 @@ export default function HomeClient({
               </div>
 
               <div
-                className="flex items-center rounded-xl px-4 py-3 cursor-pointer"
+                className="flex items-center rounded-xl px-4 py-3 cursor-pointer transition-colors"
                 style={{
                   backgroundColor: "#0f0f0f",
                   border: "1px solid #2a2a2a",
                 }}
-                onClick={() => setShowNameDropdown((p) => !p)}
+                onClick={() => setShowNameDropdown(!showNameDropdown)}
               >
                 <span className="flex-1 text-sm font-medium text-white">
                   {name || "Select name..."}
                 </span>
-                <span style={{ color: "#666" }}>⌄</span>
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 12 12"
+                  fill="none"
+                  className={`transition-transform`}
+                  style={{ rotate: `${showNameDropdown ? "180deg" : "0deg"}` }}
+                >
+                  <path
+                    d="M2 4L6 8L10 4"
+                    stroke="#666"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                  />
+                </svg>
               </div>
 
               {showNameDropdown && (
@@ -521,7 +631,7 @@ export default function HomeClient({
                   className="h-10 bg-[#1a1111] disabled:opacity-50 text-sm font-medium transition-all"
                   // className="h-10 bg-[#1a1111] disabled:opacity-50 text-sm font-medium transition-all"
                   style={{ border: "1px solid #20283d", color: "#557ce8" }}
-                  onClick={clearMonth}
+                  onClick={resetMonth}
                 >
                   Reset
                 </Button>
@@ -562,37 +672,11 @@ export default function HomeClient({
         </TabsContent>
 
         <TabsContent value="myDuties" className="gap-6 flex flex-col">
-          <div className="space-y-2">
-            {activeDays.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No availability selected.
-              </p>
-            ) : (
-              activeDays.map((day) => (
-                <div
-                  key={day.iso}
-                  className="rounded-xl px-4 py-3"
-                  style={{
-                    backgroundColor: "#161616",
-                    border: "1px solid #1e1e1e",
-                  }}
-                >
-                  <span className="text-sm font-medium text-white">
-                    {new Date(day.iso).toLocaleDateString("en-GB", {
-                      weekday: "long",
-                      day: "numeric",
-                      month: "long",
-                      year: "numeric",
-                    })}
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
+          <MyDutyView name={name} planningMonth={planningMonth} />
         </TabsContent>
 
         <TabsContent value="admin" className="gap-6 flex flex-col">
-          Admin view later
+          <AdminDutyView />
         </TabsContent>
       </Tabs>
     </div>
