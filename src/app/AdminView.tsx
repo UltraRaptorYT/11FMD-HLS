@@ -30,7 +30,6 @@ function formatDutyDateShort(iso: string) {
   const day = String(date.getDate()).padStart(2, "0");
   const month = date.toLocaleDateString("en-GB", { month: "long" });
   const year = String(date.getFullYear()).slice(-2);
-  const weekday = date.toLocaleDateString("en-GB", { weekday: "short" });
 
   return `${day} ${month} ${year}`;
 }
@@ -225,7 +224,7 @@ function toPlanningMonthSheetName(date: Date) {
 
 function buildPlanningMonthOptions(baseDate: Date) {
   return Array.from({ length: 6 }).map((_, i) => {
-    const date = addMonths(baseDate, i - 1);
+    const date = addMonths(baseDate, i - 2);
 
     return {
       value: toPlanningMonthSheetName(date),
@@ -312,11 +311,6 @@ export default function AdminDutyView({
 
   const selectedDuty = selectedDate ? dutiesByDate[selectedDate] : null;
   const sections = selectedDuty?.sections ?? [];
-
-  const totalPeople = useMemo(
-    () => sections.reduce((sum, section) => sum + section.names.length, 0),
-    [sections],
-  );
 
   const selectedMessage = useMemo(() => {
     if (!selectedDate) return "";

@@ -9,10 +9,7 @@ import AdminDutyView from "@/app/AdminView";
 import { addMonths, fromISO, toISO } from "@/lib/utils";
 
 function getPlanningMonth(today: Date) {
-  // Before 20th: plan next month
-  // From 20th onwards: plan following month
-  const offset = today.getDate() >= 20 ? 2 : 1;
-  return new Date(today.getFullYear(), today.getMonth() + offset, 1);
+  return new Date(today.getFullYear(), today.getMonth() + 1, 1);
 }
 
 function toPlanningMonthSheetName(date: Date) {
@@ -63,14 +60,18 @@ export default function HomeClient({
 }: {
   namelist: string[];
 }): JSX.Element {
-  const today = useMemo(() => new Date(), []);
-  const planningMonth = useMemo(() => getPlanningMonth(today), [today]);
   const [nameSearch, setNameSearch] = useState("");
   const [monthOffset, setMonthOffset] = useState(0);
   const [name, setName] = useState("");
   const [showNameDropdown, setShowNameDropdown] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [lastSubmitAt, setLastSubmitAt] = useState(0);
+
+  const today = useMemo(() => new Date(), []);
+
+  const initialPlanningMonth = useMemo(() => getPlanningMonth(today), [today]);
+  const [planningMonth, setPlanningMonth] = useState(initialPlanningMonth);
+
   const viewDate = useMemo(
     () => addMonths(planningMonth, monthOffset),
     [planningMonth, monthOffset],
@@ -78,6 +79,20 @@ export default function HomeClient({
 
   const filteredNames = namelist.filter((n) =>
     n.toLowerCase().includes(nameSearch.toLowerCase()),
+  );
+
+  const currentMonthStart = useMemo(
+    () => new Date(today.getFullYear(), today.getMonth(), 1),
+    [today],
+  );
+
+  const currentMonthSheetName = useMemo(
+    () => toPlanningMonthSheetName(currentMonthStart),
+    [currentMonthStart],
+  );
+
+  const [adminSelectedMonth, setAdminSelectedMonth] = useState(
+    currentMonthSheetName,
   );
 
   const defaultAdminMonth = useMemo(
@@ -91,8 +106,6 @@ export default function HomeClient({
     [planningMonth],
   );
 
-  const [adminSelectedMonth, setAdminSelectedMonth] =
-    useState(defaultAdminMonth);
   const [adminSelectedDate, setAdminSelectedDate] = useState("");
   const [activeTab, setActiveTab] = useState("plan");
 
@@ -151,11 +164,17 @@ export default function HomeClient({
         const data = await res.json();
 
         if (!cancelled) {
+          const locked = Boolean(data.locked);
+
           setPlanningLock({
-            locked: Boolean(data.locked),
+            locked,
             finalStatus: data.finalStatus ?? "UNLOCKED",
             source: data.source ?? "unknown",
           });
+
+          if (locked) {
+            setPlanningMonth((prev) => addMonths(prev, 1));
+          }
         }
       } catch (e) {
         console.error("[HLS] getPlanningLock error:", e);
