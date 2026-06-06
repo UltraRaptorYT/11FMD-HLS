@@ -1,16 +1,7 @@
 "use client";
 import { useState, useMemo, useEffect } from "react";
-import { addMonths, fromISO, toISO } from "@/lib/utils";
+import { addMonths, toISO } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-
-function toPlanningMonthSheetName(date: Date) {
-  return date
-    .toLocaleDateString("en-GB", {
-      month: "short",
-      year: "numeric",
-    })
-    .toUpperCase();
-}
 
 export default function MyDutyView({
   name,
@@ -25,6 +16,9 @@ export default function MyDutyView({
   const [duties, setDuties] = useState<{ iso: string; label: string }[]>([]);
   const [sheetName, setSheetName] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [publicHolidaysByYear, setPublicHolidaysByYear] = useState<
+    Record<string, Record<string, string>>
+  >({});
 
   const viewMonth = useMemo(
     () => addMonths(planningMonth, monthOffset),
@@ -50,6 +44,44 @@ export default function MyDutyView({
   const viewYear = viewMonth.getFullYear();
   const viewMonthIndex = viewMonth.getMonth();
   const daysInMonth = new Date(viewYear, viewMonthIndex + 1, 0).getDate();
+
+  useEffect(() => {
+    if (publicHolidaysByYear[String(viewYear)]) return;
+
+    let cancelled = false;
+
+    async function fetchPublicHolidays() {
+      try {
+        const res = await fetch(
+          `/api/getPublicHolidays?${new URLSearchParams({
+            year: String(viewYear),
+          })}`,
+        );
+
+        if (!res.ok) {
+          console.error(`[MyDutyView] getPublicHolidays ${res.status}`);
+          return;
+        }
+
+        const data = await res.json();
+
+        if (!cancelled) {
+          setPublicHolidaysByYear((prev) => ({
+            ...prev,
+            [String(viewYear)]: data.holidays ?? {},
+          }));
+        }
+      } catch (e) {
+        console.error("[MyDutyView] getPublicHolidays error:", e);
+      }
+    }
+
+    fetchPublicHolidays();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [publicHolidaysByYear, viewYear]);
 
   useEffect(() => {
     if (!name.trim()) {
@@ -99,7 +131,20 @@ export default function MyDutyView({
     };
   }, [name, planningMonthSheetName]);
 
-  const dutySet = useMemo(() => new Set(duties.map((d) => d.iso)), [duties]);
+  const publicHolidayDates = useMemo(
+    () => new Set(Object.keys(publicHolidaysByYear[String(viewYear)] ?? {})),
+    [publicHolidaysByYear, viewYear],
+  );
+
+  const visibleDuties = useMemo(
+    () => duties.filter((duty) => !publicHolidayDates.has(duty.iso)),
+    [duties, publicHolidayDates],
+  );
+
+  const dutySet = useMemo(
+    () => new Set(visibleDuties.map((d) => d.iso)),
+    [visibleDuties],
+  );
 
   const weekdayGrid = useMemo(() => {
     const weeks: { dayNum: number; iso: string; date: Date }[][] = [];
@@ -108,8 +153,10 @@ export default function MyDutyView({
     for (let d = 1; d <= daysInMonth; d++) {
       const date = new Date(viewYear, viewMonthIndex, d);
       const dow = date.getDay();
+      const iso = toISO(date);
 
       if (dow === 0 || dow === 6) continue;
+      if (publicHolidayDates.has(iso)) continue;
 
       if (dow === 1 && currentWeek.length > 0) {
         weeks.push(currentWeek);
@@ -118,7 +165,7 @@ export default function MyDutyView({
 
       currentWeek.push({
         dayNum: d,
-        iso: toISO(date),
+        iso,
         date,
       });
     }
@@ -126,7 +173,7 @@ export default function MyDutyView({
     if (currentWeek.length > 0) weeks.push(currentWeek);
 
     return weeks;
-  }, [viewYear, viewMonthIndex, daysInMonth]);
+  }, [viewYear, viewMonthIndex, daysInMonth, publicHolidayDates]);
 
   if (!name.trim()) {
     return (
@@ -268,7 +315,7 @@ export default function MyDutyView({
         style={{ backgroundColor: "#161616", border: "1px solid #222" }}
       >
         <div className="text-5xl font-black" style={{ color: "#c8a97e" }}>
-          {duties.length}
+          {visibleDuties.length}
         </div>
         <div
           className="text-xs font-semibold tracking-wider uppercase mt-1"

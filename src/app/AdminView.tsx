@@ -213,6 +213,25 @@ type AdminDutyByDate = Record<
   }
 >;
 
+async function fetchPublicHolidayDates(year: string) {
+  try {
+    const res = await fetch(
+      `/api/getPublicHolidays?${new URLSearchParams({ year })}`,
+    );
+
+    if (!res.ok) {
+      console.error(`[AdminDutyView] getPublicHolidays ${res.status}`);
+      return new Set<string>();
+    }
+
+    const data = await res.json();
+    return new Set<string>(Object.keys(data.holidays ?? {}));
+  } catch (e) {
+    console.error("[AdminDutyView] getPublicHolidays error:", e);
+    return new Set<string>();
+  }
+}
+
 function toPlanningMonthSheetName(date: Date) {
   return date
     .toLocaleDateString("en-GB", {
@@ -282,14 +301,26 @@ export default function AdminDutyView({
 
         const data = await res.json();
 
-        if (!cancelled) {
-          const nextDates = data.dates ?? [];
-          const nextDutiesByDate = data.dutiesByDate ?? {};
+        const nextDates = data.dates ?? [];
+        const nextDutiesByDate = data.dutiesByDate ?? {};
+        const year = nextDates[0]?.iso?.slice(0, 4);
+        const publicHolidayDates = year
+          ? await fetchPublicHolidayDates(year)
+          : new Set<string>();
+        const visibleDates = nextDates.filter(
+          (date: AdminDutyDate) => !publicHolidayDates.has(date.iso),
+        );
+        const visibleDutiesByDate = Object.fromEntries(
+          Object.entries(nextDutiesByDate).filter(
+            ([iso]) => !publicHolidayDates.has(iso),
+          ),
+        ) as AdminDutyByDate;
 
-          setDates(nextDates);
-          setDutiesByDate(nextDutiesByDate);
-          if (!selectedDate || !nextDutiesByDate[selectedDate]) {
-            setSelectedDate(nextDates[0]?.iso ?? "");
+        if (!cancelled) {
+          setDates(visibleDates);
+          setDutiesByDate(visibleDutiesByDate);
+          if (!selectedDate || !visibleDutiesByDate[selectedDate]) {
+            setSelectedDate(visibleDates[0]?.iso ?? "");
           }
         }
       } catch (e) {

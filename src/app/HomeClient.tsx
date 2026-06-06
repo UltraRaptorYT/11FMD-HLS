@@ -30,7 +30,10 @@ type DutyDay = {
   enabled: boolean;
 };
 
-function buildDefaultMonth(date: Date): Record<string, DutyDay> {
+function buildDefaultMonth(
+  date: Date,
+  publicHolidayDates: Set<string> = new Set(),
+): Record<string, DutyDay> {
   const year = date.getFullYear();
   const month = date.getMonth();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -45,6 +48,7 @@ function buildDefaultMonth(date: Date): Record<string, DutyDay> {
     if (![1, 3, 5].includes(dayOfWeek)) continue;
 
     const iso = toISO(day);
+    if (publicHolidayDates.has(iso)) continue;
 
     result[iso] = {
       iso,
@@ -53,6 +57,17 @@ function buildDefaultMonth(date: Date): Record<string, DutyDay> {
   }
 
   return result;
+}
+
+function filterPublicHolidays(
+  plan: Record<string, DutyDay>,
+  publicHolidayDates: Set<string>,
+) {
+  if (publicHolidayDates.size === 0) return plan;
+
+  return Object.fromEntries(
+    Object.entries(plan).filter(([iso]) => !publicHolidayDates.has(iso)),
+  );
 }
 
 export default function HomeClient({
@@ -113,6 +128,7 @@ export default function HomeClient({
     () => new Date(viewDate.getFullYear(), viewDate.getMonth(), 1),
     [viewDate],
   );
+  const viewedYear = viewedMonthStart.getFullYear();
 
   const viewedMonthStartISO = toISO(viewedMonthStart);
 
@@ -135,6 +151,52 @@ export default function HomeClient({
   } | null>(null);
 
   const [isLockLoading, setIsLockLoading] = useState(false);
+  const [publicHolidaysByYear, setPublicHolidaysByYear] = useState<
+    Record<string, Record<string, string>>
+  >({});
+
+  useEffect(() => {
+    if (publicHolidaysByYear[String(viewedYear)]) return;
+
+    let cancelled = false;
+
+    async function fetchPublicHolidays() {
+      try {
+        const res = await fetch(
+          `/api/getPublicHolidays?${new URLSearchParams({
+            year: String(viewedYear),
+          })}`,
+        );
+
+        if (!res.ok) {
+          console.error(`[HLS] getPublicHolidays ${res.status}`);
+          return;
+        }
+
+        const data = await res.json();
+
+        if (!cancelled) {
+          setPublicHolidaysByYear((prev) => ({
+            ...prev,
+            [String(viewedYear)]: data.holidays ?? {},
+          }));
+        }
+      } catch (e) {
+        console.error("[HLS] getPublicHolidays error:", e);
+      }
+    }
+
+    fetchPublicHolidays();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [publicHolidaysByYear, viewedYear]);
+
+  const publicHolidayDates = useMemo(
+    () => new Set(Object.keys(publicHolidaysByYear[String(viewedYear)] ?? {})),
+    [publicHolidaysByYear, viewedYear],
+  );
 
   const baseKey = "hlsDetails";
   const nameKey = `${baseKey}:name`;
@@ -210,7 +272,12 @@ export default function HomeClient({
     buildDefaultMonth(planningMonth),
   );
 
-  const activeDays = Object.values(plan).filter((d) => d.enabled);
+  const visiblePlan = useMemo(
+    () => filterPublicHolidays(plan, publicHolidayDates),
+    [plan, publicHolidayDates],
+  );
+
+  const activeDays = Object.values(visiblePlan).filter((d) => d.enabled);
 
   const changeMonth = (offset: number) => {
     const nextOffset = monthOffset + offset;
@@ -375,7 +442,10 @@ export default function HomeClient({
   const resetMonth = () => {
     if (isLockedMonth) return;
 
-    const reset = buildDefaultMonth(fromISO(viewedMonthStartISO));
+    const reset = buildDefaultMonth(
+      fromISO(viewedMonthStartISO),
+      publicHolidayDates,
+    );
     setPlan(reset);
 
     toast.info("Reset to default");
@@ -385,9 +455,9 @@ export default function HomeClient({
     if (isLockedMonth) return;
 
     const cleared = Object.fromEntries(
-      Object.entries(buildDefaultMonth(fromISO(viewedMonthStartISO))).map(
-        ([iso, day]) => [iso, { ...day, enabled: false }],
-      ),
+      Object.entries(
+        buildDefaultMonth(fromISO(viewedMonthStartISO), publicHolidayDates),
+      ).map(([iso, day]) => [iso, { ...day, enabled: false }]),
     );
 
     setPlan(cleared);
@@ -437,7 +507,7 @@ export default function HomeClient({
         body: JSON.stringify({
           name: name.trim(),
           monthStart: toISO(viewedMonthStart),
-          availability: plan,
+          availability: visiblePlan,
         }),
       });
 
@@ -449,8 +519,8 @@ export default function HomeClient({
         return;
       }
 
-      localStorage.setItem(submittedKey, JSON.stringify(plan));
-      localStorage.setItem(draftKey, JSON.stringify(plan));
+      localStorage.setItem(submittedKey, JSON.stringify(visiblePlan));
+      localStorage.setItem(draftKey, JSON.stringify(visiblePlan));
 
       setLastSubmitAt(Date.now());
 
@@ -649,7 +719,7 @@ export default function HomeClient({
               </div>
 
               <div className="space-y-3">
-                {Object.values(plan).map((day) => {
+                {Object.values(visiblePlan).map((day) => {
                   const dateObj = new Date(day.iso);
                   const dayName = dateObj.toLocaleDateString("en-GB", {
                     weekday: "short",
@@ -787,7 +857,7 @@ export default function HomeClient({
         <TabsContent value="myDuties" className="gap-6 flex flex-col">
           <MyDutyView
             name={name}
-            planningMonth={planningMonth}
+            planningMonth={currentMonthStart}
             onSelectAdminDate={({ sheetName, iso }) => {
               setAdminSelectedMonth(sheetName);
               setAdminSelectedDate(iso);
