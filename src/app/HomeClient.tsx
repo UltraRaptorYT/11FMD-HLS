@@ -234,7 +234,7 @@ export default function HomeClient({
             source: data.source ?? "unknown",
           });
 
-          if (locked) {
+          if (locked && monthOffset === 0) {
             setPlanningMonth((prev) => addMonths(prev, 1));
           }
         }
@@ -251,7 +251,7 @@ export default function HomeClient({
     return () => {
       cancelled = true;
     };
-  }, [planningMonthSheetName]);
+  }, [planningMonthSheetName, monthOffset]);
 
   const isLockedMonth = Boolean(planningLock?.locked);
 
