@@ -13,6 +13,7 @@
     "@opengovsg/sgid-client": "^2.3.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
     "googleapis": "^171.4.0",
     "jose": "^6.2.0",
     "lucide-react": "^0.563.0",

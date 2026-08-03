@@ -1,26 +1,23 @@
 import HomeClient from "@/app/HomeClient";
-import { getBaseUrl } from "@/lib/get-base-url";
+import { getUserRows } from "@/lib/users";
 
 async function getUsers(reload?: boolean) {
-  const baseUrl = getBaseUrl() ?? "http://localhost:3000";
-  const url = new URL("/api/getUsers", baseUrl);
-  if (reload) url.searchParams.set("reload", "true");
-
-  const res = await fetch(url.toString(), { cache: "no-store" });
-  if (!res.ok) return [];
-
-  const data = (await res.json()) as { items?: string[]; rows?: string[][] };
-  return (
-    data.items ?? data.rows?.map((r) => `${r[0]} ${r[1]}`).filter(Boolean) ?? []
-  );
+  try {
+    const { rows } = await getUserRows(Boolean(reload));
+    return rows.map((row) => `${row[0] ?? ""} ${row[1] ?? ""}`.trim()).filter(Boolean);
+  } catch (error) {
+    console.error("[Page] Failed to load users", error);
+    return [];
+  }
 }
 
 export default async function Page({
   searchParams,
 }: {
-  searchParams: { reload?: string };
+  searchParams: Promise<{ reload?: string }>;
 }) {
-  const reload = searchParams?.reload === "true";
+  const { reload: reloadParam } = await searchParams;
+  const reload = reloadParam === "true";
 
   const [users] = await Promise.all([getUsers(reload)]);
 

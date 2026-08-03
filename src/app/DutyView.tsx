@@ -85,7 +85,6 @@ export default function MyDutyView({
 
   useEffect(() => {
     if (!name.trim()) {
-      setDuties([]);
       return;
     }
 
@@ -131,19 +130,14 @@ export default function MyDutyView({
     };
   }, [name, planningMonthSheetName]);
 
-  const publicHolidayDates = useMemo(
-    () => new Set(Object.keys(publicHolidaysByYear[String(viewYear)] ?? {})),
+  const publicHolidays = useMemo(
+    () => publicHolidaysByYear[String(viewYear)] ?? {},
     [publicHolidaysByYear, viewYear],
   );
 
-  const visibleDuties = useMemo(
-    () => duties.filter((duty) => !publicHolidayDates.has(duty.iso)),
-    [duties, publicHolidayDates],
-  );
-
   const dutySet = useMemo(
-    () => new Set(visibleDuties.map((d) => d.iso)),
-    [visibleDuties],
+    () => new Set(duties.map((duty) => duty.iso)),
+    [duties],
   );
 
   const weekdayGrid = useMemo(() => {
@@ -156,7 +150,6 @@ export default function MyDutyView({
       const iso = toISO(date);
 
       if (dow === 0 || dow === 6) continue;
-      if (publicHolidayDates.has(iso)) continue;
 
       if (dow === 1 && currentWeek.length > 0) {
         weeks.push(currentWeek);
@@ -173,7 +166,7 @@ export default function MyDutyView({
     if (currentWeek.length > 0) weeks.push(currentWeek);
 
     return weeks;
-  }, [viewYear, viewMonthIndex, daysInMonth, publicHolidayDates]);
+  }, [viewYear, viewMonthIndex, daysInMonth]);
 
   if (!name.trim()) {
     return (
@@ -238,12 +231,16 @@ export default function MyDutyView({
 
               {week.map(({ dayNum, iso }) => {
                 const hasDuty = dutySet.has(iso);
+                const holidayName = publicHolidays[iso];
+                const isPublicHoliday = Boolean(holidayName);
 
                 return (
                   <button
                     key={iso}
                     type="button"
                     disabled={!hasDuty}
+                    title={holidayName}
+                    aria-label={`${dayNum} ${monthLabel}${holidayName ? `, ${holidayName}` : ""}${hasDuty ? ", HLS duty" : ", no duty"}`}
                     onClick={() => {
                       if (!hasDuty) return;
 
@@ -255,9 +252,11 @@ export default function MyDutyView({
                     className="relative flex flex-col items-center justify-center rounded-lg py-2 transition-all disabled:cursor-default"
                     style={{
                       backgroundColor: hasDuty ? "#1a1812" : "transparent",
-                      border: hasDuty
-                        ? "1px solid #2a2518"
-                        : "1px solid transparent",
+                      border: isPublicHoliday
+                        ? "2px solid rgba(139,0,0,0.5)"
+                        : hasDuty
+                          ? "1px solid #2a2518"
+                          : "1px solid transparent",
                       minHeight: "52px",
                       cursor: hasDuty ? "pointer" : "default",
                     }}
@@ -291,7 +290,7 @@ export default function MyDutyView({
       </div>
 
       <div
-        className="flex items-center justify-center gap-6 text-xs"
+        className="flex flex-wrap items-center justify-center gap-x-6 gap-y-3 text-xs"
         style={{ color: "#666" }}
       >
         <span className="flex items-center gap-2">
@@ -308,6 +307,10 @@ export default function MyDutyView({
           />
           No duty
         </span>
+        <span className="flex items-center gap-2">
+          <span className="h-3 w-3 rounded-[3px] border-2 border-[rgba(139,0,0,0.5)]" />
+          Public holiday
+        </span>
       </div>
 
       <div
@@ -315,7 +318,7 @@ export default function MyDutyView({
         style={{ backgroundColor: "#161616", border: "1px solid #222" }}
       >
         <div className="text-5xl font-black" style={{ color: "#c8a97e" }}>
-          {visibleDuties.length}
+          {duties.length}
         </div>
         <div
           className="text-xs font-semibold tracking-wider uppercase mt-1"

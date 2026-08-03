@@ -1,16 +1,16 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import {
+  useState,
+  useMemo,
+  useEffect,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import { Button } from "@/components/ui/button";
 import { addMonths } from "@/lib/utils";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { toast } from "sonner";
+import SearchableSelect from "@/app/admin/SearchableSelect";
 
 function formatDutyDateLong(iso: string) {
   const [y, m, d] = iso.split("-").map(Number);
@@ -233,12 +233,11 @@ async function fetchPublicHolidayDates(year: string) {
 }
 
 function toPlanningMonthSheetName(date: Date) {
-  return date
-    .toLocaleDateString("en-GB", {
-      month: "short",
-      year: "numeric",
-    })
+  const month = date
+    .toLocaleDateString("en-GB", { month: "long" })
+    .slice(0, 3)
     .toUpperCase();
+  return `${month} ${date.getFullYear()}`;
 }
 
 function buildPlanningMonthOptions(baseDate: Date) {
@@ -264,7 +263,7 @@ export default function AdminDutyView({
   selectedMonth: string;
   setSelectedMonth: (value: string) => void;
   selectedDate: string;
-  setSelectedDate: (value: string) => void;
+  setSelectedDate: Dispatch<SetStateAction<string>>;
 }) {
   const today = useMemo(() => new Date(), []);
   const defaultPlanningMonth = useMemo(() => getPlanningMonth(today), [today]);
@@ -319,9 +318,11 @@ export default function AdminDutyView({
         if (!cancelled) {
           setDates(visibleDates);
           setDutiesByDate(visibleDutiesByDate);
-          if (!selectedDate || !visibleDutiesByDate[selectedDate]) {
-            setSelectedDate(visibleDates[0]?.iso ?? "");
-          }
+          setSelectedDate((current) =>
+            current && visibleDutiesByDate[current]
+              ? current
+              : visibleDates[0]?.iso ?? "",
+          );
         }
       } catch (e) {
         console.error("[AdminDutyView] fetch error:", e);
@@ -338,10 +339,10 @@ export default function AdminDutyView({
     return () => {
       cancelled = true;
     };
-  }, [selectedMonth]);
+  }, [selectedMonth, setSelectedDate]);
 
   const selectedDuty = selectedDate ? dutiesByDate[selectedDate] : null;
-  const sections = selectedDuty?.sections ?? [];
+  const sections = useMemo(() => selectedDuty?.sections ?? [], [selectedDuty]);
 
   const selectedMessage = useMemo(() => {
     if (!selectedDate) return "";
@@ -375,29 +376,14 @@ export default function AdminDutyView({
           Select planning month
         </div>
 
-        <Select value={selectedMonth} onValueChange={setSelectedMonth}>
-          <SelectTrigger className="h-12 w-full border border-[#2a2a2a] bg-[#0f0f0f] px-4 text-sm text-white">
-            <SelectValue placeholder="Select month" />
-          </SelectTrigger>
-
-          <SelectContent
-            position="popper"
-            side="bottom"
-            align="start"
-            sideOffset={8}
-            className="z-[9999] w-[var(--radix-select-trigger-width)] border border-[#2a2a2a] bg-[#111111] text-white shadow-xl"
-          >
-            {monthOptions.map((month) => (
-              <SelectItem
-                key={month.value}
-                value={month.value}
-                className="cursor-pointer rounded-lg px-3 py-2 text-sm text-white focus:bg-[#252525] focus:text-white"
-              >
-                {month.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <SearchableSelect
+          value={selectedMonth}
+          options={monthOptions}
+          onValueChange={setSelectedMonth}
+          placeholder="Select month"
+          searchPlaceholder="Search month…"
+          emptyMessage="No matching month."
+        />
       </div>
 
       <div className="space-y-2">
@@ -408,35 +394,18 @@ export default function AdminDutyView({
           Select duty date
         </div>
 
-        <Select
+        <SearchableSelect
           value={selectedDate}
+          options={dates.map((date) => ({
+            value: date.iso,
+            label: date.label,
+          }))}
           onValueChange={setSelectedDate}
+          placeholder={isLoading ? "Loading dates…" : "Select date"}
+          searchPlaceholder="Search duty date…"
+          emptyMessage="No matching duty date."
           disabled={isLoading || dates.length === 0}
-        >
-          <SelectTrigger className="h-12 w-full border border-[#2a2a2a] bg-[#0f0f0f] px-4 text-sm text-white">
-            <SelectValue
-              placeholder={isLoading ? "Loading dates..." : "Select date"}
-            />
-          </SelectTrigger>
-
-          <SelectContent
-            position="popper"
-            side="bottom"
-            align="start"
-            sideOffset={8}
-            className="z-[9999] w-[var(--radix-select-trigger-width)] border border-[#2a2a2a] bg-[#111111] text-white shadow-xl"
-          >
-            {dates.map((date) => (
-              <SelectItem
-                key={date.iso}
-                value={date.iso}
-                className="cursor-pointer rounded-lg px-3 py-2 text-sm text-white focus:bg-[#252525] focus:text-white"
-              >
-                {date.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        />
       </div>
 
       {sections.map((section) => (

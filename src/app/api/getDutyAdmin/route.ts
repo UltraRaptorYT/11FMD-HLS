@@ -91,13 +91,39 @@ export async function GET(req: NextRequest) {
 
     const sheets = google.sheets({ version: "v4", auth: getAuth() });
 
-    const res = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `'${sheetName}'!A:ZZ`,
-    });
+    const [res, meta] = await Promise.all([
+      sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `'${sheetName}'!A:ZZ`,
+      }),
+      sheets.spreadsheets.get({
+        spreadsheetId: SPREADSHEET_ID,
+        ranges: [`'${sheetName}'!A1:ZZ3`],
+        includeGridData: false,
+      }),
+    ]);
 
     const rows = res.data.values ?? [];
     const dateHeaderRow = rows[2] ?? [];
+    const monthSheet = meta.data.sheets?.find(
+      (sheet) => sheet.properties?.title === sheetName,
+    );
+    const dutySectionByColumn = new Map<number, string>();
+
+    for (let col = 1; col < dateHeaderRow.length; col++) {
+      const directValue = String(rows[1]?.[col] ?? "").trim();
+      const merge = monthSheet?.merges?.find(
+        (range) =>
+          (range.startRowIndex ?? 0) <= 1 &&
+          (range.endRowIndex ?? 0) > 1 &&
+          (range.startColumnIndex ?? 0) <= col &&
+          (range.endColumnIndex ?? 0) > col,
+      );
+      const mergedValue = merge
+        ? String(rows[1]?.[merge.startColumnIndex ?? col] ?? "").trim()
+        : "";
+      dutySectionByColumn.set(col, directValue || mergedValue);
+    }
 
     const dates = dateHeaderRow
       .map((value, col) => {
@@ -109,16 +135,23 @@ export async function GET(req: NextRequest) {
         return {
           iso,
           label: String(value ?? "").trim(),
+          dutySection: dutySectionByColumn.get(col) ?? "",
           col,
         };
       })
-      .filter(Boolean) as { iso: string; label: string; col: number }[];
+      .filter(Boolean) as {
+      iso: string;
+      label: string;
+      dutySection: string;
+      col: number;
+    }[];
 
     const dutiesByDate: Record<
       string,
       {
         iso: string;
         label: string;
+        dutySection: string;
         sections: { title: string; names: string[] }[];
       }
     > = {};
@@ -156,6 +189,7 @@ export async function GET(req: NextRequest) {
       dutiesByDate[date.iso] = {
         iso: date.iso,
         label: date.label,
+        dutySection: date.dutySection,
         sections,
       };
     }

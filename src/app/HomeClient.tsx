@@ -13,12 +13,11 @@ function getPlanningMonth(today: Date) {
 }
 
 function toPlanningMonthSheetName(date: Date) {
-  return date
-    .toLocaleDateString("en-GB", {
-      month: "short",
-      year: "numeric",
-    })
+  const month = date
+    .toLocaleDateString("en-GB", { month: "long" })
+    .slice(0, 3)
     .toUpperCase();
+  return `${month} ${date.getFullYear()}`;
 }
 
 function isSameMonth(a: Date, b: Date) {
@@ -109,19 +108,8 @@ export default function HomeClient({
   const [adminSelectedMonth, setAdminSelectedMonth] = useState(
     currentMonthSheetName,
   );
-
-  const defaultAdminMonth = useMemo(
-    () =>
-      planningMonth
-        .toLocaleDateString("en-GB", {
-          month: "short",
-          year: "numeric",
-        })
-        .toUpperCase(),
-    [planningMonth],
-  );
-
   const [adminSelectedDate, setAdminSelectedDate] = useState("");
+
   const [activeTab, setActiveTab] = useState("plan");
 
   const viewedMonthStart = useMemo(
