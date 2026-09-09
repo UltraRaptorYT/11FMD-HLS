@@ -28,7 +28,7 @@ export default function MyDutyView({
   const planningMonthSheetName = useMemo(
     () =>
       viewMonth
-        .toLocaleDateString("en-GB", {
+        .toLocaleDateString("en-US", {
           month: "short",
           year: "numeric",
         })
